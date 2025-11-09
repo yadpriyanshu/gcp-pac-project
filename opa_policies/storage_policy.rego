@@ -1,5 +1,4 @@
 package terraform.storage
-
 import future.keywords.if
 import future.keywords.in
 
