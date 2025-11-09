@@ -1,0 +1,15 @@
+
+name: OPA Security Scan
+on: [pull_request]
+jobs:
+  opa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: terraform init
+      - run: terraform plan -out=tfplan.out
+      - run: terraform show -json tfplan.out > tfplan.json
+      - uses: open-policy-agent/conftest-action@v1
+        with:
+          path: tfplan.json
+          policy: opa_policies
