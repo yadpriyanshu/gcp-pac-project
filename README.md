@@ -147,7 +147,7 @@ This repository uses GitHub Actions for continuous integration and policy valida
      --workload-identity-pool="github-actions-pool" \
      --display-name="GitHub provider" \
      --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
-     --attribute-condition="assertion.repository=='<OWNER>/<REPO>'" \
+     --attribute-condition="attribute.repository=='<OWNER>/<REPO>'" \
      --issuer-uri="https://token.actions.githubusercontent.com"
 
    # Create Service Account
