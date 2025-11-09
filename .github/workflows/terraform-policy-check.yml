@@ -81,22 +81,32 @@ jobs:
         id: opa
         run: |
           echo "Running OPA policy evaluation..."
-          # Use OPA exit code behavior to detect violations
-          if opa eval --fail-defined --format pretty --input tfplan.json --data ../opa_policies 'data.terraform.compute.deny' || \
-             opa eval --fail-defined --format pretty --input tfplan.json --data ../opa_policies 'data.terraform.storage.deny'; then
-            echo "OPA POLICY VIOLATIONS FOUND!"
+          # Produce JSON output and save
+          opa eval --format json --input tfplan.json --data ../opa_policies "data.terraform" > opa_eval.json
+          cat opa_eval.json
+
+          # Install jq for parsing
+          sudo apt-get update && sudo apt-get install -y jq
+
+          # Count deny entries in compute and storage (handles object or array shapes)
+          DENY_COMPUTE=$(jq -r 'try (.result[0].expressions[0].value.compute.deny // {} | length) catch 0' opa_eval.json)
+          DENY_STORAGE=$(jq -r 'try (.result[0].expressions[0].value.storage.deny // {} | length) catch 0' opa_eval.json)
+          DENY_TOTAL=$((DENY_COMPUTE + DENY_STORAGE))
+
+          # Save result for comment (pretty)
+          RESULT_PRETTY=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform" 2>&1 || true)
+          echo "opa_result<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT_PRETTY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          if [ "$DENY_TOTAL" -gt 0 ]; then
+            echo "OPA POLICY VIOLATIONS FOUND: $DENY_TOTAL"
             echo "opa_outcome=failure" >> $GITHUB_OUTPUT
             exit 1
           else
             echo "All OPA policies PASSED!"
             echo "opa_outcome=success" >> $GITHUB_OUTPUT
           fi
-          
-          # Save full evaluation for reference
-          RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform")
-          echo "opa_result<<EOF" >> $GITHUB_OUTPUT
-          echo "$RESULT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Update PR with Results
         if: github.event_name == 'pull_request'
