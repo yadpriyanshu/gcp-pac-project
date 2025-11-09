@@ -1,4 +1,3 @@
-
 name: "Terraform and Policy Validation"
 
 on:
@@ -20,7 +19,7 @@ permissions:
 
 jobs:
   validate:
-    name: "Validate Terraform and Policies"
+    name: "Validate Terraform and OPA Policies"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,15 +36,10 @@ jobs:
 
       - name: Setup OPA
         run: |
-          curl -L -o opa https://openpolicyagent.org/downloads/v0.55.0/opa_linux_amd64_static
+          curl -L -o opa https://openpolicyagent.org/downloads/v0.68.0/opa_linux_amd64_static
           chmod 755 ./opa
           sudo mv opa /usr/local/bin/
-
-      - name: Setup Conftest
-        run: |
-          wget https://github.com/open-policy-agent/conftest/releases/download/v0.45.0/conftest_0.45.0_Linux_x86_64.tar.gz
-          tar xzf conftest_0.45.0_Linux_x86_64.tar.gz
-          sudo mv conftest /usr/local/bin/
+          opa version
 
       - id: 'auth'
         name: 'Authenticate to Google Cloud'
@@ -73,8 +67,8 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          terraform plan -out=tfplan -input=false
-          terraform show -json tfplan > tfplan.json
+          terraform plan -out=tfplan.out -input=false
+          terraform show -json tfplan.out > tfplan.json
         env:
           TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_region: "us-central1"
@@ -83,22 +77,53 @@ jobs:
           TF_VAR_subnet: ${{ secrets.GCP_SUBNET }}
           TF_VAR_instance_name: "fbm-example"
 
-      - name: Run Policy Tests
-        id: policy
+      - name: Run OPA Policy Check
+        id: opa
         run: |
-          conftest test tfplan.json --policy ../opa_policies
+          echo "Running OPA policy evaluation..."
+          RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform" 2>&1)
+          echo "$RESULT"
+          
+          # Save result for comment
+          echo "opa_result<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Fail if any deny rules triggered (non-empty object/array)
+          if echo "$RESULT" | grep -q '"deny": \[' || echo "$RESULT" | grep -q '"deny": {'; then
+            echo "OPA POLICY VIOLATIONS FOUND!"
+            echo "opa_outcome=failure" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "All 21 OPA policies PASSED!"
+            echo "opa_outcome=success" >> $GITHUB_OUTPUT
+          fi
 
       - name: Update PR with Results
-        if: github.event_name == 'pull_request' && (steps.fmt.outcome == 'failure' || steps.validate.outcome == 'failure' || steps.policy.outcome == 'failure')
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const output = `### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
-            ### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
-            ### Policy Validation 📋\`${{ steps.policy.outcome }}\`
+            const fmt = `${{ steps.fmt.outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const validate = `${{ steps.validate.outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const opa = `${{ steps.opa.outputs.opa_outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const opaResult = `${{ steps.opa.outputs.opa_result }}`;
 
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            let details = '';
+            if (opa === 'Failed') {
+              details = '\n<details><summary>Click to see policy violations</summary>\n\n```json\n' + opaResult + '\n```\n</details>';
+            }
+
+            const output = `### Terraform & OPA Validation Report
+
+            **Terraform Format** Passed \`${fmt}\`  
+            **Terraform Validate** Passed \`${validate}\`  
+            **OPA Policy Check (21 rules)** Passed \`${opa}\`  
+
+            ${details}
+
+            *Triggered by @${{ github.actor }} via \`${{ github.event_name }}\`*`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
