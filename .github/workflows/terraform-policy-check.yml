@@ -82,14 +82,17 @@ jobs:
           RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform")
           echo "$RESULT"
 
+          # Save full result
           echo "opa_result<<EOF" >> $GITHUB_OUTPUT
           echo "$RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          DENY=$(echo "$RESULT" | jq -r 'try (.compute.deny | length), (.storage.deny | length)')
-          if echo "$DENY" | grep -qE "^[1-9][0-9]*$"; then
+          # CORRECTLY detect violations: only if deny has actual messages
+          VIOLATIONS=$(echo "$RESULT" | grep -E '"deny": \[' | wc -l)
+          if [ "$VIOLATIONS" -gt 0 ]; then
             echo "OPA POLICY VIOLATIONS FOUND!"
             echo "opa_outcome=failure" >> $GITHUB_OUTPUT
+            exit 1
           else
             echo "All 21 OPA policies PASSED!"
             echo "opa_outcome=success" >> $GITHUB_OUTPUT
@@ -102,7 +105,7 @@ jobs:
           script: |
             const fmt = '${{ steps.fmt.outcome }}' === 'success' ? 'Passed' : 'Failed';
             const validate = '${{ steps.validate.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const opa = '${{ steps.opa.outputs.opa_outcome }}' === 'success' ? 'Passed' : 'Failed';
+            const opa = '${{ steps.opa.outcome }}' === 'success' ? 'Passed' : 'Failed';
             const result = `${{ steps.opa.outputs.opa_result }}`;
 
             let details = '';
