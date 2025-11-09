@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write  # Required for requesting the JWT
 
 jobs:
   validate:
