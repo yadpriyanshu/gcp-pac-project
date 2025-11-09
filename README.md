@@ -10,16 +10,16 @@ This repository demonstrates infrastructure policy enforcement for Google Cloud 
 
 ```
 ├── conftest/          # Conftest configuration
-├── opa_policies/      # OPA/Rego policy definitions
-│   ├── compute_policies.rego
-│   └── storage_policies.rego
-└── terraform/         # Terraform configurations
+├── opa_policies/      
+│   ├── compute_policy.rego
+│   └── storage_policy.rego
+└── terraform/         
     ├── main.tf
     ├── variables.tf
     ├── outputs.tf
     └── modules/
-        ├── compute/  # GCP Compute Engine module
-        └── storage/  # GCP Storage module
+        ├── compute/ 
+        └── storage/ 
 ```
 
 ## Features
@@ -63,15 +63,51 @@ This repository demonstrates infrastructure policy enforcement for Google Cloud 
 
 ## Policy Testing
 
-The repository includes policies for:
-- Compute Engine instances
-  - Required labels
-  - Allowed machine types
-  - Required disk encryption
-- Storage buckets
-  - Uniform bucket-level access
-  - Required encryption
-  - Lifecycle rules
+The repository includes comprehensive security and compliance policies:
+
+### Google Compute Engine Policies
+
+1. **Network Security**
+   - No public IP addresses allowed
+   - Default network usage is prohibited
+   - VM access must be controlled through IAM permissions
+
+2. **Location & Resource Standards**
+   - Region restricted to us-central1 only
+   - Machine type must be n2d-standard-8
+   - VM names must start with "fbm-"
+
+3. **Disk Configuration**
+   - OS must be CentOS Stream 10
+   - Boot disk: 100GB balanced persistent disk
+   - Additional disk: 100GB balanced persistent disk
+   - All disks must use Customer-Managed Encryption Keys (CMEK)
+
+4. **Backup & Recovery**
+   - Snapshot schedule must be present
+   - Multi-region snapshot storage
+   - 7-day default retention period
+
+5. **Security & Monitoring**
+   - Ops Agent must be installed for monitoring and logging
+   - Compute Engine default service account prohibited
+   - Deletion protection must be enabled
+
+### Google Cloud Storage Policies
+
+1. **Location & Naming**
+   - Regional buckets only (us-central1)
+   - Bucket names must contain "cloudzen"
+
+2. **Storage Configuration**
+   - Storage class must be Standard
+   - Fine-grained access control required
+   - Public access prevention enforced
+
+3. **Data Protection**
+   - CMEK encryption required
+   - Soft delete policy enabled
+   - 7-day retention period for soft-deleted objects
 
 ## Contributing
 
