@@ -1,5 +1,6 @@
 # Local .terraform directories
 **/.terraform/*
+.terraform.lock.hcl
 
 # .tfstate files
 *.tfstate
@@ -27,6 +28,7 @@ terraform.rc
 tfplan
 *.tfplan
 tfplan.json
+tfplan.out
 
 # macOS specific
 .DS_Store
