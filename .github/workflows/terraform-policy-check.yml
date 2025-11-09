@@ -52,6 +52,7 @@ jobs:
         uses: 'google-github-actions/setup-gcloud@v1'
 
       - name: Terraform Init
+        id: init
         run: terraform init
 
       - name: Terraform Format Check
@@ -64,6 +65,7 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan
+        id: plan
         run: |
           terraform plan -out=tfplan.out -input=false
           terraform show -json tfplan.out > tfplan.json
@@ -78,44 +80,58 @@ jobs:
       - name: Run OPA Policy Check
         id: opa
         run: |
-          echo "Running OPA policy evaluation..."
-          RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform")
-          echo "$RESULT"
+            echo "Running OPA policy evaluation..."
+            # Produce JSON output (do not print full JSON)
+            opa eval --format json --input tfplan.json --data ../opa_policies "data.terraform" > opa_eval.json
 
-          # Save full result
-          echo "opa_result<<EOF" >> $GITHUB_OUTPUT
-          echo "$RESULT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            # Install jq silently
+            sudo apt-get update -qq >/dev/null
+            sudo apt-get install -y -qq jq >/dev/null
 
-          # CORRECTLY detect violations: only if deny has actual messages
-          VIOLATIONS=$(echo "$RESULT" | grep -E '"deny": \[' | wc -l)
-          if [ "$VIOLATIONS" -gt 0 ]; then
-            echo "OPA POLICY VIOLATIONS FOUND!"
-            echo "opa_outcome=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "All 21 OPA policies PASSED!"
-            echo "opa_outcome=success" >> $GITHUB_OUTPUT
-          fi
+            # Extract deny messages (keys or array entries) for compute and storage
+            # For object-shaped deny (map of message->true) extract keys; for arrays extract values
+            COMPUTE_MSGS=$(jq -r 'try (.result[0].expressions[0].value.compute.deny | if type=="object" then keys[] else .[] end) catch empty' opa_eval.json || true)
+            STORAGE_MSGS=$(jq -r 'try (.result[0].expressions[0].value.storage.deny | if type=="object" then keys[] else .[] end) catch empty' opa_eval.json || true)
+            # Combine and dedupe messages, count non-empty lines
+            ALL_MSGS=$(printf "%s\n%s\n" "$COMPUTE_MSGS" "$STORAGE_MSGS" | awk 'NF' | awk '!seen[$0]++')
+            DENY_TOTAL=$(printf "%s\n" "$ALL_MSGS" | grep -cve '^\s*$' || true)
+
+            # Save concise messages for PR comment (no full JSON)
+            echo "opa_messages<<EOF" >> $GITHUB_OUTPUT
+            if [ -n "$ALL_MSGS" ]; then
+              printf "%s\n" "$ALL_MSGS" >> $GITHUB_OUTPUT
+            fi
+            echo "EOF" >> $GITHUB_OUTPUT
+
+            # Also save a short status (success/failure)
+            if [ "$DENY_TOTAL" -gt 0 ]; then
+              echo "OPA POLICY VIOLATIONS FOUND: $DENY_TOTAL"
+              echo "opa_outcome=failure" >> $GITHUB_OUTPUT
+              exit 1
+            else
+              echo "All OPA policies PASSED!"
+              echo "opa_outcome=success" >> $GITHUB_OUTPUT
+            fi
+
+          
 
       - name: Update PR with Results
-        if: github.event_name == 'pull_request'
+        if: ${{ github.event_name == 'pull_request' && always() }}
         uses: actions/github-script@v6
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fmt = '${{ steps.fmt.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const validate = '${{ steps.validate.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const opa = '${{ steps.opa.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const result = `${{ steps.opa.outputs.opa_result }}`;
+            const fmt = `${{ steps.fmt.outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const validate = `${{ steps.validate.outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const opa = `${{ steps.opa.outputs.opa_outcome }}` === 'success' ? 'Passed' : 'Failed';
+            const opaMessages = `${{ steps.opa.outputs.opa_messages }}`;
 
             let details = '';
             if (opa === 'Failed') {
-              details = '\n<details><summary>Click to see violations</summary>\n\n```json\n' + result + '\n```\n</details>';
-            } else {
-              details = '\n<details><summary>All 21 rules passed</summary>\n\n```json\n' + result + '\n```\n</details>';
+              details = '\n<details><summary>Click to see policy violations</summary>\n\n```text\n' + opaMessages + '\n```\n</details>';
             }
 
-            const body = `### Terraform & OPA Validation Report
+            const output = `### Terraform & OPA Validation Report
 
             **Terraform Format** Passed \`${fmt}\`  
             **Terraform Validate** Passed \`${validate}\`  
@@ -123,11 +139,11 @@ jobs:
 
             ${details}
 
-            *By @${{ github.actor }} · ${{ github.event_name }}*`;
+            *Triggered by @${{ github.actor }} via \`${{ github.event_name }}\`*`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
-            });
+              body: output
+            })
