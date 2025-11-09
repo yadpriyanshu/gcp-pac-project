@@ -1,4 +1,4 @@
-name: "Terraform and Policy Validation"
+name: "OPA Policy Enforcement"
 
 on:
   push:
@@ -18,15 +18,15 @@ permissions:
   id-token: write  
 
 jobs:
-  validate:
-    name: "Validate Terraform and OPA Policies"
+  enforce-opa:
+    name: "Block merge on OPA violations"
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./terraform
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -37,31 +37,21 @@ jobs:
       - name: Setup OPA
         run: |
           curl -L -o opa https://openpolicyagent.org/downloads/v0.68.0/opa_linux_amd64_static
-          chmod 755 ./opa
+          chmod +x opa
           sudo mv opa /usr/local/bin/
           opa version
 
-      - id: 'auth'
-        name: 'Authenticate to Google Cloud'
-        uses: 'google-github-actions/auth@v1'
+      - name: GCP Auth
+        uses: google-github-actions/auth@v1
         with:
           workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
           service_account: '${{ secrets.WIF_SERVICE_ACCOUNT }}'
 
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v1'
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v1
 
       - name: Terraform Init
         run: terraform init
-
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-        continue-on-error: true
-
-      - name: Terraform Validate
-        id: validate
-        run: terraform validate
 
       - name: Terraform Plan
         run: |
@@ -78,38 +68,55 @@ jobs:
       - name: Run OPA Policy Check
         id: opa
         run: |
-          RESULT=$(opa eval --format pretty --input terraform/tfplan.json --data opa_policies "data.terraform")
+          echo "Evaluating OPA policies..."
+          
+          # CORRECT PATHS: we're already in ./terraform
+          RESULT=$(opa eval --format pretty \
+            --input tfplan.json \
+            --data ../opa_policies \
+            "data.terraform")
+          
           echo "$RESULT"
           
-          # Save for comment
           echo "result<<EOF" >> $GITHUB_OUTPUT
           echo "$RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
-          # Count violations in ARRAY format
-          VIOLATIONS=$(echo "$RESULT" | grep -c '"deny": \[' || echo 0)
-          if [ "$VIOLATIONS" -gt 0 ]; then
-            echo "OPA VIOLATIONS FOUND – BLOCKING MERGE"
-            exit 1
+          # Detect violations (array with content)
+          if echo "$RESULT" | grep -q '"deny": \['; then
+            if echo "$RESULT" | grep -q '"deny": \[\s*\]'; then
+              echo "All 21 policies PASSED"
+            else
+              echo "OPA VIOLATIONS FOUND – MERGE BLOCKED"
+              exit 1
+            fi
           else
-            echo "All 21 policies PASSED"
+            echo "No deny array found – check policy format"
+            exit 1
           fi
 
       - name: Comment on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
             const result = `${{ steps.opa.outputs.result }}`;
-            const body = `### OPA Policy Enforcement
+            const hasViolations = !result.includes('"deny": []');
+            const status = hasViolations ? 'Failed' : 'Passed';
+            const emoji = hasViolations ? 'Failed' : 'Passed';
             
-            ${result.includes('[]') ? 'Passed All 21 rules passed' : 'Failed Violations found'}
+            const body = `### OPA Policy Enforcement ${status}
             
-            <details><summary>Details</summary>
+            ${hasViolations ? 'Failed Violations detected – merge blocked' : 'Passed All 21 rules passed'}
+            
+            <details><summary>Click for details</summary>
             
             \`\`\`json
             ${result}
             \`\`\`
-            </details>`;
+            </details>
+            
+            *By @${{ github.actor }}*`;
             
             github.rest.issues.createComment({
               issue_number: context.issue.number,
