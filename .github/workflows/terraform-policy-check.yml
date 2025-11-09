@@ -82,52 +82,38 @@ jobs:
           RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform")
           echo "$RESULT"
 
-          # Save full result
           echo "opa_result<<EOF" >> $GITHUB_OUTPUT
           echo "$RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # CORRECTLY detect violations: only if deny has actual messages
-          VIOLATIONS=$(echo "$RESULT" | grep -E '"deny": \[' | wc -l)
+          VIOLATIONS=$(echo "$RESULT" | grep -c '"deny": \[' || true)
           if [ "$VIOLATIONS" -gt 0 ]; then
-            echo "OPA POLICY VIOLATIONS FOUND!"
+            echo "OPA VIOLATIONS – MERGE BLOCKED"
             echo "opa_outcome=failure" >> $GITHUB_OUTPUT
             exit 1
           else
-            echo "All 21 OPA policies PASSED!"
+            echo "All 21 policies PASSED"
             echo "opa_outcome=success" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update PR with Results
+      - name: Comment on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
-            const fmt = '${{ steps.fmt.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const validate = '${{ steps.validate.outcome }}' === 'success' ? 'Passed' : 'Failed';
-            const opa = '${{ steps.opa.outcome }}' === 'success' ? 'Passed' : 'Failed';
+            const status = '${{ steps.opa.outcome }}' === 'success' ? 'Passed' : 'Failed';
             const result = `${{ steps.opa.outputs.opa_result }}`;
-
-            let details = '';
-            if (opa === 'Failed') {
-              details = '\n<details><summary>Click to see violations</summary>\n\n```json\n' + result + '\n```\n</details>';
-            } else {
-              details = '\n<details><summary>All 21 rules passed</summary>\n\n```json\n' + result + '\n```\n</details>';
-            }
-
-            const body = `### Terraform & OPA Validation Report
-
-            **Terraform Format** Passed \`${fmt}\`  
-            **Terraform Validate** Passed \`${validate}\`  
-            **OPA Policy Check (21 rules)** Passed \`${opa}\`  
-
-            ${details}
-
-            *By @${{ github.actor }} · ${{ github.event_name }}*`;
+            const details = status === 'Failed'
+              ? '<details><summary>Click to see violations</summary>\n\n```json\n' + result + '\n```\n</details>'
+              : '<details><summary>All 21 rules passed</summary>\n\n```json\n' + result + '\n```\n</details>';
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              body: `### OPA Policy Enforcement ${status === 'Passed' ? 'Passed' : 'Failed'}
+
+            ${details}
+
+            *By @${{ github.actor }}*`
             });
