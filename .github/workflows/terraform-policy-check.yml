@@ -80,36 +80,43 @@ jobs:
       - name: Run OPA Policy Check
         id: opa
         run: |
-          echo "Running OPA policy evaluation..."
-          # Produce JSON output and save
-          opa eval --format json --input tfplan.json --data ../opa_policies "data.terraform" > opa_eval.json
-          cat opa_eval.json
+            echo "Running OPA policy evaluation..."
+            # Produce JSON output (do not print full JSON)
+            opa eval --format json --input tfplan.json --data ../opa_policies "data.terraform" > opa_eval.json
 
-          # Install jq for parsing
-          sudo apt-get update && sudo apt-get install -y jq
+            # Install jq silently
+            sudo apt-get update -qq >/dev/null
+            sudo apt-get install -y -qq jq >/dev/null
 
-          # Count deny entries in compute and storage (handles object or array shapes)
-          DENY_COMPUTE=$(jq -r 'try (.result[0].expressions[0].value.compute.deny // {} | length) catch 0' opa_eval.json)
-          DENY_STORAGE=$(jq -r 'try (.result[0].expressions[0].value.storage.deny // {} | length) catch 0' opa_eval.json)
-          DENY_TOTAL=$((DENY_COMPUTE + DENY_STORAGE))
+            # Extract deny messages (keys or array entries) for compute and storage
+            # For object-shaped deny (map of message->true) extract keys; for arrays extract values
+            COMPUTE_MSGS=$(jq -r 'try (.result[0].expressions[0].value.compute.deny | if type=="object" then keys[] else .[] end) catch empty' opa_eval.json || true)
+            STORAGE_MSGS=$(jq -r 'try (.result[0].expressions[0].value.storage.deny | if type=="object" then keys[] else .[] end) catch empty' opa_eval.json || true)
+            # Combine and dedupe messages, count non-empty lines
+            ALL_MSGS=$(printf "%s\n%s\n" "$COMPUTE_MSGS" "$STORAGE_MSGS" | awk 'NF' | awk '!seen[$0]++')
+            DENY_TOTAL=$(printf "%s\n" "$ALL_MSGS" | grep -cve '^\s*$' || true)
 
-          # Save result for comment (pretty)
-          RESULT_PRETTY=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform" 2>&1 || true)
-          echo "opa_result<<EOF" >> $GITHUB_OUTPUT
-          echo "$RESULT_PRETTY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            # Save concise messages for PR comment (no full JSON)
+            echo "opa_messages<<EOF" >> $GITHUB_OUTPUT
+            if [ -n "$ALL_MSGS" ]; then
+              printf "%s\n" "$ALL_MSGS" >> $GITHUB_OUTPUT
+            fi
+            echo "EOF" >> $GITHUB_OUTPUT
 
-          if [ "$DENY_TOTAL" -gt 0 ]; then
-            echo "OPA POLICY VIOLATIONS FOUND: $DENY_TOTAL"
-            echo "opa_outcome=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "All OPA policies PASSED!"
-            echo "opa_outcome=success" >> $GITHUB_OUTPUT
-          fi
+            # Also save a short status (success/failure)
+            if [ "$DENY_TOTAL" -gt 0 ]; then
+              echo "OPA POLICY VIOLATIONS FOUND: $DENY_TOTAL"
+              echo "opa_outcome=failure" >> $GITHUB_OUTPUT
+              exit 1
+            else
+              echo "All OPA policies PASSED!"
+              echo "opa_outcome=success" >> $GITHUB_OUTPUT
+            fi
+
+          
 
       - name: Update PR with Results
-        if: github.event_name == 'pull_request'
+        if: ${{ github.event_name == 'pull_request' && always() }}
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -117,11 +124,11 @@ jobs:
             const fmt = `${{ steps.fmt.outcome }}` === 'success' ? 'Passed' : 'Failed';
             const validate = `${{ steps.validate.outcome }}` === 'success' ? 'Passed' : 'Failed';
             const opa = `${{ steps.opa.outputs.opa_outcome }}` === 'success' ? 'Passed' : 'Failed';
-            const opaResult = `${{ steps.opa.outputs.opa_result }}`;
+            const opaMessages = `${{ steps.opa.outputs.opa_messages }}`;
 
             let details = '';
             if (opa === 'Failed') {
-              details = '\n<details><summary>Click to see policy violations</summary>\n\n```json\n' + opaResult + '\n```\n</details>';
+              details = '\n<details><summary>Click to see policy violations</summary>\n\n```text\n' + opaMessages + '\n```\n</details>';
             }
 
             const output = `### Terraform & OPA Validation Report
