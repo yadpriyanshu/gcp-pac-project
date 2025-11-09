@@ -1,15 +1,107 @@
 
-name: OPA Security Scan
-on: [pull_request]
+name: "Terraform and Policy Validation"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'terraform/**'
+      - 'opa_policies/**'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'terraform/**'
+      - 'opa_policies/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
-  opa:
+  validate:
+    name: "Validate Terraform and Policies"
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+
     steps:
-      - uses: actions/checkout@v4
-      - run: terraform init
-      - run: terraform plan -out=tfplan.out
-      - run: terraform show -json tfplan.out > tfplan.json
-      - uses: open-policy-agent/conftest-action@v1
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          path: tfplan.json
-          policy: opa_policies
+          terraform_version: "1.5.7"
+
+      - name: Setup OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/v0.55.0/opa_linux_amd64_static
+          chmod 755 ./opa
+          sudo mv opa /usr/local/bin/
+
+      - name: Setup Conftest
+        run: |
+          wget https://github.com/open-policy-agent/conftest/releases/download/v0.45.0/conftest_0.45.0_Linux_x86_64.tar.gz
+          tar xzf conftest_0.45.0_Linux_x86_64.tar.gz
+          sudo mv conftest /usr/local/bin/
+
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
+          service_account: '${{ secrets.WIF_SERVICE_ACCOUNT }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -out=tfplan -input=false
+          terraform show -json tfplan > tfplan.json
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: "us-central1"
+          TF_VAR_zone: "us-central1-a"
+          TF_VAR_network: "poc-nw"
+          TF_VAR_subnet: ${{ secrets.GCP_SUBNET }}
+          TF_VAR_instance_name: "fbm-example"
+
+      - name: Run Policy Tests
+        id: policy
+        run: |
+          conftest test tfplan.json --policy ../opa_policies
+
+      - name: Update PR with Results
+        if: github.event_name == 'pull_request' && (steps.fmt.outcome == 'failure' || steps.validate.outcome == 'failure' || steps.policy.outcome == 'failure')
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            ### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            ### Policy Validation 📋\`${{ steps.policy.outcome }}\`
+
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
