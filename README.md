@@ -9,7 +9,6 @@ This repository demonstrates infrastructure policy enforcement for Google Cloud 
 ## Project Structure
 
 ```
-├── conftest/          # Conftest configuration
 ├── opa_policies/      
 │   ├── compute_policy.rego
 │   └── storage_policy.rego
