@@ -37,7 +37,7 @@ This repository demonstrates infrastructure policy enforcement for Google Cloud 
 
 - Terraform >= 1.3
 - Google Cloud SDK
-- OPA/Conftest
+- OPA
 - Access to a GCP project
 
 ## Usage
@@ -52,7 +52,7 @@ This repository demonstrates infrastructure policy enforcement for Google Cloud 
    ```bash
    terraform plan -out=tfplan
    terraform show -json tfplan > tfplan.json
-   conftest test tfplan.json --policy ../opa_policies
+   opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform"
    ```
 
 3. Apply infrastructure:
