@@ -82,15 +82,12 @@ jobs:
           RESULT=$(opa eval --format pretty --input tfplan.json --data ../opa_policies "data.terraform")
           echo "$RESULT"
 
-          # Save full result
           echo "opa_result<<EOF" >> $GITHUB_OUTPUT
           echo "$RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Extract only the deny parts using jq
-          DENY=$(echo "$RESULT" | jq -r 'try (.compute.deny // {} | tojson), (.storage.deny // {} | tojson)')
-          
-          if echo "$DENY" | grep -q '"'; then
+          DENY=$(echo "$RESULT" | jq -r 'try (.compute.deny | length), (.storage.deny | length)')
+          if echo "$DENY" | grep -qE "^[1-9][0-9]*$"; then
             echo "OPA POLICY VIOLATIONS FOUND!"
             echo "opa_outcome=failure" >> $GITHUB_OUTPUT
           else
@@ -99,9 +96,9 @@ jobs:
           fi
 
       - name: Update PR with Results
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fmt = '${{ steps.fmt.outcome }}' === 'success' ? 'Passed' : 'Failed';
             const validate = '${{ steps.validate.outcome }}' === 'success' ? 'Passed' : 'Failed';
@@ -110,9 +107,9 @@ jobs:
 
             let details = '';
             if (opa === 'Failed') {
-              details = '\n<details><summary>Click to see policy violations (expand)</summary>\n\n```json\n' + result + '\n```\n</details>';
+              details = '\n<details><summary>Click to see violations</summary>\n\n```json\n' + result + '\n```\n</details>';
             } else {
-              details = '\n<details><summary>All 21 rules passed (expand)</summary>\n\n```json\n' + result + '\n```\n</details>';
+              details = '\n<details><summary>All 21 rules passed</summary>\n\n```json\n' + result + '\n```\n</details>';
             }
 
             const body = `### Terraform & OPA Validation Report
@@ -123,11 +120,11 @@ jobs:
 
             ${details}
 
-            *Triggered by @${{ github.actor }} via \`${{ github.event_name }}\`*`;
+            *By @${{ github.actor }} · ${{ github.event_name }}*`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: body
-            })
+            });
