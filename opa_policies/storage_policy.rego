@@ -10,7 +10,7 @@ buckets := [r |
     r := change
 ]
 
-# === 7 Storage Rules ===
+
 deny[msg] if {
     r := buckets[_]
     lower(r.change.after.location) != "us-central1"

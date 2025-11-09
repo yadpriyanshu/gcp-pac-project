@@ -37,7 +37,6 @@ variable "ops_agent_startup_script" {
   type    = string
   default = <<-EOT
     #!/bin/bash
-    # Install Ops Agent (example for linux)
     curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
     sudo bash add-google-cloud-ops-agent-repo.sh --also-install
   EOT

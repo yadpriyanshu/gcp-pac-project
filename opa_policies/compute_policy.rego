@@ -3,9 +3,6 @@ package terraform.compute
 import future.keywords.if
 import future.keywords.in
 
-# ------------------------------------------------------------------
-# 1. Collect resources (safe, indexed)
-# ------------------------------------------------------------------
 vms := [r |
     some i
     change := input.resource_changes[i]
@@ -38,9 +35,7 @@ disk_attachments := [r |
     r := change
 ]
 
-# ------------------------------------------------------------------
-# 2. 14 GCE Rules — ALL SAFE
-# ------------------------------------------------------------------
+
 deny[msg] if {
     vm := vms[i]
     nic := vm.change.after.network_interface[j]
