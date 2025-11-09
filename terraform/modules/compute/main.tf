@@ -128,7 +128,7 @@ resource "google_compute_instance" "vm" {
     subnetwork = var.subnet
   }
 
-  deletion_protection = true
+  deletion_protection = false
 
   metadata = {
     "enable-oslogin" = "TRUE"
